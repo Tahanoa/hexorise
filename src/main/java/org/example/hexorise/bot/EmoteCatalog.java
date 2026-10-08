@@ -15,8 +15,22 @@ public class EmoteCatalog {
     }
     public List<Emote> list() { return emotes; }
     public Emote resolve(String selector) {
-        return emotes.stream().filter(emote -> Integer.toString(emote.number()).equals(selector)
-            || emote.name().equalsIgnoreCase(selector) || emote.id().equalsIgnoreCase(selector)).findFirst()
-            .orElseThrow(() -> new IllegalArgumentException("Unknown emote. Select a catalog name or number."));
+        if (selector == null) throw new IllegalArgumentException("Select an emote name, number or ID.");
+        String selected = selector.strip().toLowerCase(Locale.ROOT);
+        return emotes.stream().filter(emote -> Integer.toString(emote.number()).equals(selected)
+            || emote.name().equalsIgnoreCase(selected) || emote.id().equalsIgnoreCase(selected)).findFirst()
+            .orElseGet(() -> {
+                if (selected.length() <= 100 && selected.matches("(?:dance|emote|emoji|idle)[-_][a-z0-9_-]+"))
+                    return new Emote(0, selected, selected);
+                throw new IllegalArgumentException("Unknown emote. Select a catalog name, number or direct Highrise ID.");
+            });
+    }
+    public String page(int number) {
+        int size = 5, pages = Math.max(1, (emotes.size() + size - 1) / size);
+        if (number < 1 || number > pages) throw new IllegalArgumentException("Emote page must be between 1 and " + pages);
+        String entries = emotes.stream().skip((long) (number - 1) * size).limit(size)
+            .map(emote -> emote.number() + ": " + emote.name())
+            .collect(java.util.stream.Collectors.joining(" | "));
+        return "Emotes " + number + "/" + pages + " | " + entries;
     }
 }

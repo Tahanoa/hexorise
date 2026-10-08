@@ -54,7 +54,7 @@ async function refresh() {
   try {
     const [status, users, loops] = await Promise.all([api('/bot/status'), api('/bot/users'), api('/bot/loops')]);
     $('state').textContent = status.state; $('state').classList.toggle('online', status.state === 'READY');
-    $('connection').textContent = status.state === 'READY' ? 'Connected to Highrise' : 'Live actions need a ready bot';
+    $('connection').textContent = status.state === 'READY' ? 'Connected to Highrise' : ['REJECTED', 'CONFIGURATION_ERROR'].includes(status.state) ? 'Check room access and API token in Connection' : 'Live actions need a ready bot';
     $('active-room').textContent = status.roomId || 'no configured room';
     $('queue').textContent = status.queuedMessages; $('members-count').textContent = users.length; $('loops-count').textContent = loops.length;
     $('members-label').textContent = users.length + ' synchronized';
@@ -91,7 +91,7 @@ form('settings-form', async () => {
   await api(path + '/settings', 'PUT', body); await refresh(); notice('Room settings saved.');
 });
 form('emote-form', async () => {
-  await api('/bot/emotes', 'POST', { selector: $('emote-selector').value, targetUserId: $('emote-target').value.trim() || null, repeat: $('repeat').checked, intervalSeconds: Number($('interval').value) });
+  await api('/bot/emotes', 'POST', { selector: $('emote-id').value.trim() || $('emote-selector').value, targetUserId: $('emote-target').value.trim() || null, repeat: $('repeat').checked, intervalSeconds: Number($('interval').value) });
   await refresh(); notice('Emote accepted by Highrise.');
 });
 $('stop-all').addEventListener('click', () => run($('stop-all'), async () => { await api('/bot/emotes/stop-all', 'POST'); await refresh(); notice('All loops stopped.'); }));
@@ -109,10 +109,45 @@ form('admin-form', async () => {
   await api(roomPath() + '/admins/' + encodeURIComponent($('admin-user').value.trim()), 'PUT', { role: $('admin-role').value });
   await loadAdmins(); $('admin-user').value = ''; notice('Administrator saved.');
 });
+let emoteCatalog = [];
+function renderCatalog() {
+  const query = $('emote-search').value.trim().toLowerCase(), previous = $('emote-selector').value;
+  const matches = emoteCatalog.filter(emote => `${emote.number} ${emote.name} ${emote.id}`.toLowerCase().includes(query));
+  $('emote-selector').replaceChildren(...matches.map(emote => {
+    const option = document.createElement('option'); option.value = String(emote.number);
+    option.textContent = `${emote.number} · ${emote.name} · ${emote.id}`; return option;
+  }));
+  if (matches.some(emote => String(emote.number) === previous)) $('emote-selector').value = previous;
+  $('catalog-count').textContent = `${matches.length} shown / ${emoteCatalog.length} catalog entries. Direct IDs support additional emotes.`;
+}
+$('emote-search').addEventListener('input', renderCatalog);
+function connectionBody() {
+  if (!$('connection-form').reportValidity()) throw new Error('Enter a valid room ID.');
+  return { roomId: $('connect-room').value.trim(), apiToken: $('connect-token').value || null, autoConnect: $('auto-connect').checked };
+}
+async function loadConnection() {
+  const settings = await api('/bot/connection');
+  $('connect-room').value = settings.roomId || ''; $('auto-connect').checked = settings.autoConnect;
+  $('connect-token').value = '';
+  $('token-state').textContent = settings.tokenConfigured ? 'Token saved' : 'No token configured';
+}
+form('connection-form', async () => {
+  await api('/bot/connect', 'POST', connectionBody()); await loadConnection(); await refresh();
+  $('room-id').value = $('connect-room').value; await loadRoom();
+  notice('Connection requested. Wait for READY before sending live commands.');
+});
+$('save-connection').addEventListener('click', () => run($('save-connection'), async () => {
+  await api('/bot/connection', 'PUT', connectionBody()); await loadConnection(); notice('Connection settings saved.');
+}));
+$('disconnect').addEventListener('click', () => run($('disconnect'), async () => {
+  await api('/bot/disconnect', 'POST'); await loadConnection(); await refresh(); notice('Disconnected. Automatic connection disabled.');
+}));
+$('forget-token').addEventListener('click', () => run($('forget-token'), async () => {
+  await api('/bot/connection', 'DELETE'); await loadConnection(); await refresh(); notice('Token removed. Bot disconnected.');
+}));
 (async () => {
   try {
-    const catalog = await api('/emotes');
-    $('emote-selector').replaceChildren(...catalog.map(emote => { const option = document.createElement('option'); option.value = String(emote.number); option.textContent = `${emote.number} · ${emote.name}`; return option; }));
+    emoteCatalog = await api('/emotes'); renderCatalog(); await loadConnection();
     await refresh(); if ($('room-id').value) await loadRoom();
   } catch (error) { notice(error.message, true); }
 })();

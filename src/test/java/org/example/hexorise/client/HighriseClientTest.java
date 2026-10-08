@@ -85,6 +85,30 @@ class HighriseClientTest {
         assertThat(roster.get().path("_type").asText()).isEqualTo("GetRoomUsersResponse");
         verify(handler).onSessionStarted("bot", client);
     }
+    @Test void manuallyConnectsWhenDisabledAndChangesRoomOnlyAfterOldSessionStops() throws Exception {
+        client = new HighriseClient(new HighriseProperties(false, "", ""), mapper, handler, http);
+        client.start(); verify(http, never()).newWebSocketBuilder();
+        client.connect("first-room", "first-token"); await(() -> listener.get() != null);
+        listener.get().onText(socket, "{\"_type\":\"SessionMetadata\",\"user_id\":\"bot\"}", true);
+        await(() -> "READY".equals(client.status().state()));
+        var request = client.chat("old-session-message", null);
+        client.connect("second-room", "second-token");
+        verify(builder, timeout(3000)).header("api-token", "second-token");
+        assertThat(client.status().roomId()).isEqualTo("second-room");
+        await(request::isCompletedExceptionally);
+        verify(handler, atLeastOnce()).onSessionEnded(client);
+        assertThatThrownBy(() -> client.connect("bad room", "token")).isInstanceOf(IllegalArgumentException.class);
+    }
+    @Test void unreadableSavedTokenKeepsPanelAvailableAndDoesNotDecryptWhenAutomaticConnectionIsOff() {
+        var settings = mock(org.example.hexorise.connection.BotConnectionService.class);
+        client = new HighriseClient(new HighriseProperties(false, "", ""), mapper, handler, http, settings);
+        when(settings.settings()).thenReturn(new org.example.hexorise.connection.BotConnectionService.Settings("room", true, false));
+        client.start(); verify(settings, never()).credentials();
+        when(settings.settings()).thenReturn(new org.example.hexorise.connection.BotConnectionService.Settings("room", true, true));
+        when(settings.credentials()).thenThrow(new IllegalArgumentException("Cannot decrypt"));
+        client.start(); assertThat(client.status().state()).isEqualTo("CONFIGURATION_ERROR");
+        verify(http, never()).newWebSocketBuilder();
+    }
     private void await(BooleanSupplier condition) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(20);

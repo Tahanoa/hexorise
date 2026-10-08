@@ -69,7 +69,7 @@ public class BasicBotEventHandler implements BotEventHandler {
             switch (command) {
                 case "help" -> reply(client, BotTexts.text("help", room.commandPrefix()), target);
                 case "ping" -> reply(client, BotTexts.text("pong"), target);
-                case "emotes" -> reply(client, catalog.list().stream().map(emote -> emote.number() + ": " + emote.name()).collect(java.util.stream.Collectors.joining(" | ")), userId);
+                case "emotes" -> reply(client, catalog.page(arguments.length > 1 ? Integer.parseInt(arguments[1]) : 1), userId);
                 case "stop" -> reply(client, BotTexts.text("stopped"), userId);
                 case "botstop" -> { requireAdmin(administrator); emotes.stop(null); reply(client, BotTexts.text("stopped"), userId); }
                 case "emote", "dance", "botdance" -> {

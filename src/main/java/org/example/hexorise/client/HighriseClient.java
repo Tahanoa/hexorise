@@ -2,6 +2,7 @@ package org.example.hexorise.client;
 import tools.jackson.databind.*;
 import tools.jackson.databind.node.ObjectNode;
 import org.example.hexorise.config.HighriseProperties;
+import org.example.hexorise.connection.BotConnectionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
@@ -22,6 +23,7 @@ public class HighriseClient implements SmartLifecycle {
     private final ObjectMapper mapper;
     private final BotEventHandler events;
     private final HttpClient http;
+    private final BotConnectionService connectionSettings;
     private final ArrayBlockingQueue<Outbound> outgoing = new ArrayBlockingQueue<>(100);
     private volatile boolean running;
     private volatile String state = "DISABLED";
@@ -33,11 +35,14 @@ public class HighriseClient implements SmartLifecycle {
     record Pending(CompletableFuture<Void> result, long deadline, String expectedType, java.util.function.Consumer<JsonNode> response) {}
     public record Status(String state, String roomId, String connectionId, int queuedMessages) {}
     @Autowired
-    public HighriseClient(HighriseProperties properties, ObjectMapper mapper, BotEventHandler events) {
-        this(properties, mapper, events, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build());
+    public HighriseClient(HighriseProperties properties, ObjectMapper mapper, BotEventHandler events, BotConnectionService connectionSettings) {
+        this(properties, mapper, events, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(), connectionSettings);
     }
     HighriseClient(HighriseProperties properties, ObjectMapper mapper, BotEventHandler events, HttpClient http) {
-        this.properties = properties; this.mapper = mapper; this.events = events; this.http = http;
+        this(properties, mapper, events, http, null);
+    }
+    HighriseClient(HighriseProperties properties, ObjectMapper mapper, BotEventHandler events, HttpClient http, BotConnectionService connectionSettings) {
+        this.properties = properties; this.mapper = mapper; this.events = events; this.http = http; this.connectionSettings = connectionSettings;
     }
     public Status status() { return new Status(state, properties.roomId(), connectionId, outgoing.size()); }
     public CompletableFuture<Void> chat(String message, String whisperTarget) {
@@ -61,11 +66,32 @@ public class HighriseClient implements SmartLifecycle {
         return result;
     }
     @Override public synchronized void start() {
-        if (running || !properties.enabled()) return;
-        running = true;
-        worker = new Thread(this::run, "highrise-connection");
-        worker.setDaemon(true);
-        worker.start();
+        if (running) return;
+        if (connectionSettings != null && !connectionSettings.settings().autoConnect()) return;
+        try {
+            var credentials = connectionSettings == null
+                ? new BotConnectionService.Credentials(properties.initialRoomId(), properties.apiToken(), properties.enabled())
+                : connectionSettings.credentials();
+            if (credentials.autoConnect()) connect(credentials.roomId(), credentials.token());
+        } catch (IllegalArgumentException invalidConfiguration) {
+            state = "CONFIGURATION_ERROR";
+            log.warn("Automatic bot connection unavailable. Update connection settings in the management panel.");
+        }
+    }
+    public synchronized void connect(String roomId, String token) {
+        if (roomId == null || !roomId.matches("[A-Za-z0-9_-]{1,128}")) throw new IllegalArgumentException("Enter a valid room ID");
+        if (token == null || !token.matches("[!-~]{1,1024}")) throw new IllegalArgumentException("Enter a valid bot API token");
+        stop();
+        if (worker != null && worker.isAlive()) {
+            try { worker.join(5000); } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt(); throw new IllegalStateException("Connection change interrupted");
+            }
+            if (worker.isAlive()) throw new IllegalStateException("Previous connection is still stopping. Try again.");
+        }
+        properties.selectRoom(roomId);
+        running = true; state = "CONNECTING";
+        worker = new Thread(() -> run(roomId, token), "highrise-connection");
+        worker.setDaemon(true); worker.start();
     }
     @Override public synchronized void stop() {
         running = false;
@@ -76,8 +102,8 @@ public class HighriseClient implements SmartLifecycle {
         failQueued();
     }
     @Override public boolean isRunning() { return running; }
-    @Override public boolean isAutoStartup() { return properties.enabled(); }
-    private void run() {
+    @Override public boolean isAutoStartup() { return true; }
+    private void run(String roomId, String token) {
         long backoff = 1000;
         try {
             while (running) {
@@ -86,7 +112,7 @@ public class HighriseClient implements SmartLifecycle {
                 state = "CONNECTING";
                 try {
                     connecting = http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10))
-                        .header("room-id", properties.roomId()).header("api-token", properties.apiToken())
+                        .header("room-id", roomId).header("api-token", token)
                         .header("user-agent", "hexorise-java-bot/0.1.0")
                         .buildAsync(ENDPOINT, listener);
                     socket = connecting.get(12, TimeUnit.SECONDS);

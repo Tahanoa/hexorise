@@ -14,7 +14,7 @@ import static org.mockito.Mockito.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
-@WebMvcTest(controllers = {RoomSettingsController.class, BotStatusController.class, RoomControlsController.class}, properties = {
+@WebMvcTest(controllers = {RoomSettingsController.class, BotStatusController.class, RoomControlsController.class, BotConnectionController.class}, properties = {
     "hexora.highrise.room-id=room", "hexora.admin.username=admin", "hexora.admin.password=test-password-long-enough"})
 @Import(SecurityConfiguration.class)
 @EnableConfigurationProperties({AdminProperties.class, HighriseProperties.class})
@@ -27,6 +27,7 @@ class ApiSecurityTest {
     @MockitoBean RoomDirectory directory;
     @MockitoBean ModerationService moderation;
     @MockitoBean BotAdminRepository admins;
+    @MockitoBean org.example.hexorise.connection.BotConnectionService connections;
     private static final String SETTINGS = "{\"welcomeEnabled\":true,\"welcomeMessage\":\"Hi {username}\",\"commandPrefix\":\"!\",\"commandCooldownSeconds\":3}";
     @Test void rejectsAnonymousAndWrongCredentials() throws Exception {
         mvc.perform(get("/api/v1/bot/status")).andExpect(status().isUnauthorized());
@@ -93,5 +94,19 @@ class ApiSecurityTest {
         verify(admins).save("room", "new-owner", BotAdminRepository.Role.OWNER);
         mvc.perform(delete("/api/v1/rooms/room/admins/new-owner").session(session)).andExpect(status().isForbidden());
         verify(admins, never()).remove(anyString(), anyString());
+    }    @Test void connectionControlsRequireAdminAndCsrfAndNeverReturnToken() throws Exception {
+        mvc.perform(get("/api/v1/bot/connection")).andExpect(status().isUnauthorized());
+        when(connections.settings()).thenReturn(new org.example.hexorise.connection.BotConnectionService.Settings("room", true, false));
+        mvc.perform(get("/api/v1/bot/connection").with(user("admin").roles("ADMIN")))
+            .andExpect(status().isOk()).andExpect(jsonPath("tokenConfigured").value(true)).andExpect(jsonPath("apiToken").doesNotExist()).andExpect(jsonPath("token").doesNotExist());
+        mvc.perform(post("/api/v1/bot/connect").with(user("admin").roles("ADMIN"))
+            .contentType("application/json").content("{\"roomId\":\"room\",\"apiToken\":\"secret\"}")).andExpect(status().isForbidden());
+        mvc.perform(put("/api/v1/bot/connection").with(user("admin").roles("ADMIN")).with(csrf())
+            .contentType("application/json").content("{\"roomId\":\"bad room\",\"apiToken\":\"secret\"}")).andExpect(status().isBadRequest());
+        mvc.perform(post("/api/v1/bot/disconnect").with(user("visitor").roles("USER")).with(csrf())).andExpect(status().isForbidden());
+        verify(connections, never()).save(any(), any(), anyBoolean());
+        mvc.perform(post("/api/v1/bot/disconnect").with(user("admin").roles("ADMIN")).with(csrf())).andExpect(status().isOk());
+        verify(connections).disableAutomaticConnection(); verify(client).stop();
     }
+
 }

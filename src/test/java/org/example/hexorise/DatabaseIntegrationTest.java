@@ -17,6 +17,7 @@ class DatabaseIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired HighriseClient client;
     @Autowired BotAdminRepository admins;
+    @Autowired org.example.hexorise.connection.BotConnectionService connections;
     @Autowired DataSource dataSource;
     @Autowired RoomSettingsJpaRepository rooms;
     @Test void createsPostgresTablesAndPersistsRoomSettings() {
@@ -35,6 +36,20 @@ class DatabaseIntegrationTest {
         admins.remove("integration-room", "owner-id");
         assertThat(admins.isAdmin("integration-room", "owner-id")).isFalse();
         jdbc.update("DELETE FROM room_settings WHERE room_id = ?", "integration-room");
+    }
+    @Test void storesEncryptedConnectionAndReusesTokenWithoutReturningSecrets() {
+        try {
+            connections.save("saved-room", "saved-api-token", true);
+            assertThat(connections.settings()).isEqualTo(new org.example.hexorise.connection.BotConnectionService.Settings("saved-room", true, true));
+            String stored = jdbc.queryForObject("SELECT encrypted_token FROM bot_connection WHERE id = 'primary'", String.class);
+            assertThat(stored).doesNotContain("saved-api-token");
+            connections.save("next-room", null, false);
+            assertThat(connections.credentials().token()).isEqualTo("saved-api-token");
+            assertThat(connections.credentials().roomId()).isEqualTo("next-room");
+            connections.disableAutomaticConnection(); assertThat(connections.settings().autoConnect()).isFalse();
+            connections.forgetToken(); assertThat(connections.settings().tokenConfigured()).isFalse();
+            assertThat(connections.credentials().token()).isNull();
+        } finally { jdbc.update("DELETE FROM bot_connection WHERE id = 'primary'"); }
     }
     @Test void updatesExistingPostgresTablesAndPreservesData() {
         try {
