@@ -30,3 +30,17 @@ jobs:
           java-version: "17"
           cache: maven
       - run: ./mvnw -B verify
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check management panel against PostgreSQL
+        run: |
+          npm install --prefix /tmp/hexorise-panel-check playwright@1.51.1
+          node /tmp/hexorise-panel-check/node_modules/playwright/cli.js install --with-deps chromium
+          NODE_PATH=/tmp/hexorise-panel-check/node_modules node scripts/panel-smoke.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: panel-screenshots
+          path: target/panel-check/
+          if-no-files-found: ignore

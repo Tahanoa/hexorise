@@ -29,8 +29,8 @@ public class HighriseClient implements SmartLifecycle {
     private volatile WebSocket socket;
     private volatile CompletableFuture<WebSocket> connecting;
     private Thread worker;
-    record Outbound(ObjectNode payload, CompletableFuture<Void> result) {}
-    record Pending(CompletableFuture<Void> result, long deadline) {}
+    record Outbound(ObjectNode payload, CompletableFuture<Void> result, long queuedAt, java.util.function.Consumer<JsonNode> response) {}
+    record Pending(CompletableFuture<Void> result, long deadline, String expectedType, java.util.function.Consumer<JsonNode> response) {}
     public record Status(String state, String roomId, String connectionId, int queuedMessages) {}
     @Autowired
     public HighriseClient(HighriseProperties properties, ObjectMapper mapper, BotEventHandler events) {
@@ -41,11 +41,22 @@ public class HighriseClient implements SmartLifecycle {
     }
     public Status status() { return new Status(state, properties.roomId(), connectionId, outgoing.size()); }
     public CompletableFuture<Void> chat(String message, String whisperTarget) {
-        ObjectNode payload = HighriseProtocol.chat(mapper, message, whisperTarget);
+        return send(HighriseProtocol.chat(mapper, message, whisperTarget), event -> {});
+    }
+    public CompletableFuture<Void> emote(String emoteId, String target) {
+        return send(HighriseProtocol.emote(mapper, emoteId, target), event -> {});
+    }
+    public CompletableFuture<Void> moderate(String userId, String action, Integer seconds) {
+        return send(HighriseProtocol.moderate(mapper, userId, action, seconds), event -> {});
+    }
+    public CompletableFuture<Void> roomUsers(java.util.function.Consumer<JsonNode> response) {
+        return send(mapper.createObjectNode().put("_type", "GetRoomUsersRequest").put("rid", UUID.randomUUID().toString()), response);
+    }
+    private CompletableFuture<Void> send(ObjectNode payload, java.util.function.Consumer<JsonNode> response) {
         var result = new CompletableFuture<Void>();
         synchronized (outgoing) {
             if (!"READY".equals(state)) result.completeExceptionally(new IllegalStateException("Bot is not ready"));
-            else if (!outgoing.offer(new Outbound(payload, result))) result.completeExceptionally(new RejectedExecutionException("Send queue is full"));
+            else if (!outgoing.offer(new Outbound(payload, result, System.nanoTime(), response))) result.completeExceptionally(new RejectedExecutionException("Send queue is full"));
         }
         return result;
     }
@@ -91,8 +102,11 @@ public class HighriseClient implements SmartLifecycle {
                             if (!rid.isEmpty()) {
                                 Pending request = pending.remove(rid);
                                 if (request != null) {
-                                    if (!"ChatResponse".equals(type)) request.result().completeExceptionally(new IllegalStateException("Highrise rejected request"));
-                                    else request.result().complete(null);
+                                    if (!request.expectedType().equals(type)) request.result().completeExceptionally(new HighriseRejectedException());
+                                    else {
+                                        try { request.response().accept(event); request.result().complete(null); }
+                                        catch (RuntimeException failure) { request.result().completeExceptionally(failure); }
+                                    }
                                 }
                             } else if ("SessionMetadata".equals(type)) {
                                 if (botUserId != null || event.path("user_id").asText().isBlank()) throw new IllegalStateException("Invalid session");
@@ -102,6 +116,7 @@ public class HighriseClient implements SmartLifecycle {
                                 state = "READY";
                                 backoff = 1000;
                                 log.info("Highrise session established");
+                                events.onSessionStarted(botUserId, this);
                             } else if ("Error".equals(type)) {
                                 if (event.path("do_not_reconnect").asBoolean()) {
                                     running = false;
@@ -123,8 +138,12 @@ public class HighriseClient implements SmartLifecycle {
                         if ("READY".equals(state) && now - lastSend >= TimeUnit.MILLISECONDS.toNanos(interval)) {
                             Outbound request = outgoing.poll();
                             if (request != null) {
+                                if (request.result().isDone()) continue;
+                                if (now - request.queuedAt() > TimeUnit.SECONDS.toNanos(30)) {
+                                    request.result().completeExceptionally(new TimeoutException("Queued command expired")); continue;
+                                }
                                 String rid = request.payload().path("rid").asText();
-                                pending.put(rid, new Pending(request.result(), now + TimeUnit.SECONDS.toNanos(15)));
+                                pending.put(rid, new Pending(request.result(), now + TimeUnit.SECONDS.toNanos(15), request.payload().path("_type").asText().replace("Request", "Response"), request.response()));
                                 socket.sendText(request.payload().toString(), true).get(10, TimeUnit.SECONDS);
                                 lastSend = now;
                             }
@@ -153,6 +172,7 @@ public class HighriseClient implements SmartLifecycle {
                     if (socket != null) socket.abort();
                     socket = null; connecting = null; connectionId = null;
                     failQueued();
+                    try { events.onSessionEnded(this); } catch (RuntimeException ignored) { log.warn("Session cleanup failed"); }
                     pending.values().forEach(request -> request.result().completeExceptionally(new IllegalStateException("Connection ended")));
                 }
                 if (running) { Thread.sleep(backoff); backoff = Math.min(backoff * 2, 60000); }
@@ -161,10 +181,10 @@ public class HighriseClient implements SmartLifecycle {
         finally { running = false; if (!"REJECTED".equals(state)) state = "STOPPED"; failQueued(); }
     }
     private void failQueued() {
-        synchronized (outgoing) {
-            Outbound request;
-            while ((request = outgoing.poll()) != null) request.result().completeExceptionally(new IllegalStateException("Connection ended"));
-        }
+        List<Outbound> abandoned = new ArrayList<>();
+        synchronized (outgoing) { outgoing.drainTo(abandoned); }
+        // Complete outside the queue lock: callbacks may acquire the emote scheduler lock.
+        abandoned.forEach(request -> request.result().completeExceptionally(new IllegalStateException("Connection ended")));
     }
     private class Connection implements WebSocket.Listener {
         final ArrayBlockingQueue<JsonNode> incoming = new ArrayBlockingQueue<>(256);

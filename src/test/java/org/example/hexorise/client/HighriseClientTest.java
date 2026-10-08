@@ -67,6 +67,24 @@ class HighriseClientTest {
         await(request::isCompletedExceptionally);
         assertThat(client.status().state()).isEqualTo("RECONNECTING");
     }
+    @Test void correlatesEmoteModerationAndRosterResponsesInSharedQueue() throws Exception {
+        when(socket.sendText(any(), eq(true))).thenAnswer(invocation -> {
+            var payload = mapper.readTree(invocation.getArgument(0).toString());
+            if (payload.has("rid")) listener.get().onText(socket, mapper.createObjectNode()
+                .put("_type", payload.path("_type").asText().replace("Request", "Response"))
+                .put("rid", payload.path("rid").asText()).toString(), true);
+            return CompletableFuture.completedFuture(socket);
+        });
+        client.start(); await(() -> listener.get() != null);
+        listener.get().onText(socket, "{\"_type\":\"SessionMetadata\",\"user_id\":\"bot\",\"rate_limits\":{\"global\":[1,1]}}", true);
+        await(() -> "READY".equals(client.status().state()));
+        client.emote("emote-hello", "user").get(3, TimeUnit.SECONDS);
+        client.moderate("user", "mute", 60).get(3, TimeUnit.SECONDS);
+        var roster = new AtomicReference<tools.jackson.databind.JsonNode>();
+        client.roomUsers(roster::set).get(3, TimeUnit.SECONDS);
+        assertThat(roster.get().path("_type").asText()).isEqualTo("GetRoomUsersResponse");
+        verify(handler).onSessionStarted("bot", client);
+    }
     private void await(BooleanSupplier condition) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(20);

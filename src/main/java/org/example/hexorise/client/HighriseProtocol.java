@@ -10,6 +10,24 @@ public final class HighriseProtocol {
         if (whisperTarget != null) request.put("whisper_target_id", whisperTarget);
         return request;
     }
+    public static ObjectNode emote(ObjectMapper mapper, String emoteId, String target) {
+        if (emoteId == null || !emoteId.matches("[a-z0-9-]{1,100}")) throw new IllegalArgumentException("Invalid emote ID");
+        var request = mapper.createObjectNode().put("_type", "EmoteRequest").put("emote_id", emoteId).put("rid", UUID.randomUUID().toString());
+        if (target != null) { requireUserId(target); request.put("target_user_id", target); }
+        return request;
+    }
+    public static ObjectNode moderate(ObjectMapper mapper, String userId, String action, Integer seconds) {
+        requireUserId(userId);
+        if (!java.util.Set.of("kick", "ban", "unban", "mute").contains(action)) throw new IllegalArgumentException("Unsupported moderation action");
+        if (seconds != null && (seconds < 1 || seconds > 86400 || !java.util.Set.of("mute", "ban").contains(action)))
+            throw new IllegalArgumentException("Invalid moderation duration");
+        var request = mapper.createObjectNode().put("_type", "ModerateRoomRequest").put("user_id", userId).put("moderation_action", action).put("rid", UUID.randomUUID().toString());
+        if (seconds != null) request.put("action_length", seconds);
+        return request;
+    }
+    private static void requireUserId(String userId) {
+        if (userId == null || !userId.matches("[A-Za-z0-9_-]{1,128}")) throw new IllegalArgumentException("Invalid user ID");
+    }
     public static long intervalMillis(JsonNode limits) {
         // Apply the strictest advertised bucket, without bursting; never faster than our 1s safety floor.
         long interval = 1000;

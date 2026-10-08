@@ -1,0 +1,7 @@
+[
+ {"number":1,"name":"macarena","id":"dance-macarena"},
+ {"number":2,"name":"hello","id":"emote-hello"},
+ {"number":3,"name":"thumbsup","id":"emoji-thumbsup"},
+ {"number":4,"name":"angry","id":"emoji-angry"},
+ {"number":5,"name":"tired","id":"emote-tired"}
+]
