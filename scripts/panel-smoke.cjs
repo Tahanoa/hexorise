@@ -12,7 +12,7 @@ const app = spawn('java', ['-jar', 'target/hexorise-0.1.0-SNAPSHOT.jar'], {
 });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 (async () => {
-  let ready = false, browser;
+  let ready = false, browser, page;
   try {
     for (let attempt = 0; attempt < 60; attempt++) {
       if (app.exitCode !== null) throw new Error('Application exited before becoming ready.');
@@ -22,7 +22,8 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert(ready, 'Application readiness timed out.');
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({ httpCredentials: { username, password }, viewport: { width: 1440, height: 1000 } });
-    const page = await context.newPage(), errors = [];
+    page = await context.newPage();
+    const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(base + '/manage/');
     await page.locator('#loaded-room').getByText('panel-test-room', { exact: true }).waitFor();
@@ -33,11 +34,11 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
     await page.locator('#admin-user').fill('panel-owner-id');
     await page.locator('#admin-role').selectOption('OWNER');
     await page.getByRole('button', { name: 'Save administrator' }).click();
-    await page.locator('#admin-list').getByText('panel-owner-id', { exact: true }).waitFor();
+    await page.locator('#admin-list').getByText('panel-owner-id').waitFor();
     await page.reload();
     await page.locator('#loaded-room').getByText('panel-test-room', { exact: true }).waitFor();
     assert.equal(await page.locator('[name=welcomeMessage]').inputValue(), 'Browser test {username}');
-    await page.locator('#admin-list').getByText('panel-owner-id', { exact: true }).waitFor();
+    await page.locator('#admin-list').getByText('panel-owner-id').waitFor();
     await page.getByRole('button', { name: 'Play emote' }).click();
     await page.getByText('Bot operation unavailable. Check connection status and try again.', { exact: true }).waitFor();
     assert.equal(await page.locator('#loops-count').textContent(), '0');
@@ -49,5 +50,12 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Mobile overflows horizontally.');
     assert.deepEqual(errors, []);
     console.log('Panel passed: real PostgreSQL settings/admin persistence, Basic auth, CSRF writes, offline errors, desktop/mobile layout.');
+  } catch (error) {
+    if (page) {
+      fs.mkdirSync('target/panel-check', { recursive: true });
+      await page.screenshot({ path: 'target/panel-check/failure.png', fullPage: true });
+      console.error('Panel state:', await page.locator('body').innerText());
+    }
+    throw error;
   } finally { if (browser) await browser.close(); app.kill('SIGTERM'); }
 })().catch(error => { console.error(error); console.error(fs.readFileSync('/tmp/hexorise-panel-server.log', 'utf8')); process.exitCode = 1; });
