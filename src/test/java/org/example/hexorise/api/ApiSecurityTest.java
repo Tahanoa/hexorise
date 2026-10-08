@@ -82,4 +82,16 @@ class ApiSecurityTest {
             .contentType("application/json").content(SETTINGS.replace("Seconds\":3}", "Seconds\":3,\"emotesEnabled\":false}"))).andExpect(status().isOk());
         verify(emotes).stopAll();
     }
+    @Test void browserSessionAuthenticatesNewWritePathsWithoutBasicHeader() throws Exception {
+        var result = mvc.perform(get("/api/v1/csrf").with(httpBasic("admin", "test-password-long-enough")))
+            .andExpect(status().isOk()).andReturn();
+        var token = new tools.jackson.databind.ObjectMapper().readTree(result.getResponse().getContentAsString());
+        var session = (org.springframework.mock.web.MockHttpSession) result.getRequest().getSession(false);
+        mvc.perform(put("/api/v1/rooms/room/admins/new-owner").session(session)
+            .header(token.path("headerName").asText(), token.path("token").asText())
+            .contentType("application/json").content("{\"role\":\"OWNER\"}")).andExpect(status().isOk());
+        verify(admins).save("room", "new-owner", BotAdminRepository.Role.OWNER);
+        mvc.perform(delete("/api/v1/rooms/room/admins/new-owner").session(session)).andExpect(status().isForbidden());
+        verify(admins, never()).remove(anyString(), anyString());
+    }
 }
