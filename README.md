@@ -11,7 +11,7 @@
 - توقف reconnect برای خطای `do_not_reconnect` و پاسخ HTTP 401/403.
 - صف خروجی محدود، تطبیق پاسخ با `rid` و timeout درخواست؛ خواندن نرخ از `SessionMetadata`.
 - خوشامدگویی قابل تنظیم و فرمان‌های `!help`، `!راهنما`، `!ping` و `!پینگ` با cooldown.
-- ذخیره تنظیمات هر اتاق با Spring Data JPA در PostgreSQL و مهاجرت نسخه‌بندی‌شده با Flyway.
+- ذخیره تنظیمات هر اتاق با Spring Data JPA در PostgreSQL ؛ ایجاد و به‌روزرسانی مستقیم جدول‌ها با Hibernate.
 - API مدیریت با HTTP Basic و CSRF، اعتبارسنجی ورودی، وضعیت اتصال و health checks.
 - Docker، Maven Wrapper و CI همراه تست با PostgreSQL واقعی.
 
@@ -131,6 +131,20 @@ curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" -b /tmp/hexora-cookies.txt \
 
 `READY` فقط پس از دریافت نشست نمایش داده می‌شود. health برنامه جایگزین وضعیت اتصال ربات نیست. اگر `REJECTED` دیده شد، مجوزها و توکن را اصلاح و process را دوباره اجرا کن.
 
+## فقط PostgreSQL
+
+پروژه از ابزار مهاجرت و نسخه‌بندی اسکیمای دیتابیس استفاده نمی‌کند. Hibernate با `spring.jpa.hibernate.ddl-auto=update` جدول‌های `room_settings` و `bot_admins` را در PostgreSQL ایجاد و به‌روزرسانی می‌کند. تنظیمات اتصال فقط در `src/main/resources/application.properties` هستند.
+
+پس از دریافت این نسخه، خروجی قدیمی ساخت را پاک و برنامه را دوباره بساز تا وابستگی‌ها و منابع قدیمی در classpath باقی نمانند. ویندوز:
+
+```powershell
+git pull origin master
+.\mvnw.cmd clean verify
+java -jar target\hexorise-0.1.0-SNAPSHOT.jar
+```
+
+برای اجرای IDE نیز Maven را Reload و پروژه را Rebuild کن. اجرای برنامه باید با همان تنظیمات اتصال PostgreSQL و مدیر فعلی انجام شود.
+
 ## ساخت و تست
 
 ```bash
@@ -152,7 +166,7 @@ src/main/java/org/example/hexorise/
   bot/       رویدادها و فرمان‌ها، ایموت، مجوز و ضداسپم
   room/      تنظیمات ماندگار اتاق
   api/       API مدیریت
-src/main/resources/db/migration/  مهاجرت PostgreSQL
+src/main/resources/static/manage/ پنل مدیریت
 src/test/                        تست‌ها
 ```
 
