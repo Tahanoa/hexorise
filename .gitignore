@@ -31,3 +31,9 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Runtime credentials and logs
+.env
+.env.*
+!.env.example
+*.log
