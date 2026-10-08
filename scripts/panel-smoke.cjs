@@ -37,7 +37,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
     await page.reload();
     await page.locator('#loaded-room').getByText('panel-test-room', { exact: true }).waitFor();
     assert.equal(await page.locator('[name=welcomeMessage]').inputValue(), 'Browser test {username}');
-    assert((await page.locator('#admin-list').textContent()).includes('panel-owner-id'));
+    await page.locator('#admin-list').getByText('panel-owner-id', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Play emote' }).click();
     await page.getByText('Bot operation unavailable. Check connection status and try again.', { exact: true }).waitFor();
     assert.equal(await page.locator('#loops-count').textContent(), '0');
